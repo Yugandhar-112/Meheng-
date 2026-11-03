@@ -1,0 +1,17 @@
+# --- core (enough to run the whole app with the VADER + fallback engines) ---
+streamlit>=1.40
+pandas
+scikit-learn
+vaderSentiment
+better-profanity
+pytest
+
+# --- state-of-the-art NLP (install for the real models) ---
+torch
+transformers
+sentence-transformers
+datasets          # only for eval/eval_sentiment.py --tweet-eval
+
+# --- optional LLM backends (pick one, set its API key) ---
+anthropic
+google-genai

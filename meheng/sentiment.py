@@ -1,0 +1,123 @@
+"""Sentiment + emotion analysis with swappable engines.
+
+Engines
+-------
+vader        Lexicon/rule baseline (fast, no download, English only).
+transformer  RoBERTa-family models from the Hugging Face Hub:
+               * cardiffnlp/twitter-roberta-base-sentiment-latest  (English polarity)
+               * cardiffnlp/twitter-xlm-roberta-base-sentiment     (multilingual incl. Hindi)
+               * SamLowe/roberta-base-go_emotions                  (28 fine-grained emotions)
+
+`get_analyzer("auto")` tries the transformer engine and silently falls back to VADER
+if `transformers`/`torch` are missing or the models cannot be downloaded.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+
+_DEVANAGARI = re.compile(r"[\u0900-\u097F]")
+_HINGLISH_TOKENS = {
+    "hai", "hain", "nahi", "nahin", "kya", "mujhe", "bahut", "acha", "accha", "kaise",
+    "kaisa", "main", "mera", "meri", "tum", "aap", "ho", "tha", "thi", "kuch", "bhi",
+    "aaj", "yaar", "bhai", "dukhi", "khush", "udaas", "thak", "gaya", "gayi", "raha", "rahi",
+}
+
+
+def detect_lang(text: str) -> str:
+    """Very small script/keyword heuristic: 'hi' (Hindi/Hinglish) or 'en'."""
+    letters = [c for c in text if c.isalpha()]
+    if letters and sum(bool(_DEVANAGARI.match(c)) for c in letters) / len(letters) > 0.2:
+        return "hi"
+    tokens = re.findall(r"[a-z]+", text.lower())
+    if sum(t in _HINGLISH_TOKENS for t in tokens) >= 2:
+        return "hi"
+    return "en"
+
+
+@dataclass
+class Sentiment:
+    label: str                  # negative | neutral | positive
+    confidence: float           # probability of `label` (0-1)
+    compound: float             # signed polarity in [-1, 1]
+    emotions: list[tuple[str, float]] = field(default_factory=list)  # top-k fine-grained
+    engine: str = "vader"
+    lang: str = "en"
+
+    @property
+    def top_emotion(self) -> str | None:
+        return self.emotions[0][0] if self.emotions else None
+
+
+class VaderEngine:
+    name = "vader"
+
+    def __init__(self):
+        from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+        self._vs = SentimentIntensityAnalyzer()
+
+    def analyze(self, text: str, lang: str = "en") -> Sentiment:
+        s = self._vs.polarity_scores(text)
+        c = s["compound"]
+        label = "positive" if c >= 0.05 else "negative" if c <= -0.05 else "neutral"
+        conf = {"positive": s["pos"], "negative": s["neg"], "neutral": s["neu"]}[label]
+        return Sentiment(label, float(conf), float(c), [], self.name, lang)
+
+
+class TransformerEngine:
+    name = "transformer"
+    EN_SENT = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+    ML_SENT = "cardiffnlp/twitter-xlm-roberta-base-sentiment"
+    EMO = "SamLowe/roberta-base-go_emotions"
+    _LABEL_FIX = {"label_0": "negative", "label_1": "neutral", "label_2": "positive"}
+
+    def __init__(self, use_emotions: bool = True):
+        from transformers import pipeline  # raises ImportError if missing
+        import torch
+        self._pipeline = pipeline
+        self._device = 0 if torch.cuda.is_available() else -1
+        self._pipes: dict[str, object] = {}
+        self._use_emotions = use_emotions
+        self._get("sent_en")                      # fail fast if the hub is unreachable
+        if use_emotions:
+            self._get("emo")
+
+    def _get(self, key: str):
+        if key not in self._pipes:
+            model = {"sent_en": self.EN_SENT, "sent_ml": self.ML_SENT, "emo": self.EMO}[key]
+            self._pipes[key] = self._pipeline(
+                "text-classification", model=model, top_k=None, device=self._device
+            )
+        return self._pipes[key]
+
+    @staticmethod
+    def _flat(out):
+        return out[0] if out and isinstance(out[0], list) else out
+
+    def analyze(self, text: str, lang: str = "en") -> Sentiment:
+        key = "sent_ml" if lang != "en" else "sent_en"
+        probs = {}
+        for d in self._flat(self._get(key)(text, truncation=True, max_length=256)):
+            lab = d["label"].lower()
+            probs[self._LABEL_FIX.get(lab, lab)] = float(d["score"])
+        label = max(probs, key=probs.get)
+        compound = probs.get("positive", 0.0) - probs.get("negative", 0.0)
+
+        emotions: list[tuple[str, float]] = []
+        if self._use_emotions and lang == "en":
+            raw = self._flat(self._get("emo")(text, truncation=True, max_length=256))
+            raw = sorted(raw, key=lambda d: d["score"], reverse=True)
+            emotions = [(d["label"], float(d["score"])) for d in raw if d["label"] != "neutral"][:3]
+        return Sentiment(label, probs[label], compound, emotions, self.name, lang)
+
+
+def get_analyzer(prefer: str = "auto"):
+    """Return an engine. prefer: 'auto' | 'transformer' | 'vader'."""
+    if prefer in ("auto", "transformer"):
+        try:
+            return TransformerEngine()
+        except Exception as e:  # ImportError, OSError (offline), etc.
+            if prefer == "transformer":
+                raise
+            print(f"[meheng] transformer engine unavailable ({type(e).__name__}); using VADER fallback")
+    return VaderEngine()
