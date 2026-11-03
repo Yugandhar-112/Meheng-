@@ -24,7 +24,9 @@ INTENTS: dict[str, list[str]] = {
              "tum kya kar sakte ho"],
     "identity": ["who are you", "what is your name", "tum kaun ho", "tell me about yourself"],
 }
-MAX_TOKENS = 7  # long messages are never treated as simple commands
+MAX_TOKENS = 6          # long messages are never treated as simple commands
+SBERT_THRESHOLD = 0.65  # raised from 0.60: emotional sentences were hijacked by skills
+DIFFLIB_THRESHOLD = 0.75
 
 
 class IntentMatcher:
@@ -51,7 +53,7 @@ class IntentMatcher:
             sims = self._emb @ q
             k = int(sims.argmax())
             score, intent = float(sims[k]), self.examples[k][0]
-            return (intent, score) if score >= 0.60 else ("none", score)
+            return (intent, score) if score >= SBERT_THRESHOLD else ("none", score)
         best, best_i = 0.0, "none"
         toks = t.split()
         for intent, p in self.examples:
@@ -62,4 +64,4 @@ class IntentMatcher:
                 s = max(s, 0.85)
             if s > best:
                 best, best_i = s, intent
-        return (best_i, best) if best >= 0.75 else ("none", best)
+        return (best_i, best) if best >= DIFFLIB_THRESHOLD else ("none", best)

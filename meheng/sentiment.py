@@ -7,6 +7,8 @@ transformer  RoBERTa-family models from the Hugging Face Hub:
                * cardiffnlp/twitter-roberta-base-sentiment-latest  (English polarity)
                * cardiffnlp/twitter-xlm-roberta-base-sentiment     (multilingual incl. Hindi)
                * SamLowe/roberta-base-go_emotions                  (28 fine-grained emotions)
+             For romanised Hinglish, the transformer output is blended with a small
+             lexicon (hybrid approach).
 
 `get_analyzer("auto")` tries the transformer engine and silently falls back to VADER
 if `transformers`/`torch` are missing or the models cannot be downloaded.
@@ -21,7 +23,14 @@ _HINGLISH_TOKENS = {
     "hai", "hain", "nahi", "nahin", "kya", "mujhe", "bahut", "acha", "accha", "kaise",
     "kaisa", "main", "mera", "meri", "tum", "aap", "ho", "tha", "thi", "kuch", "bhi",
     "aaj", "yaar", "bhai", "dukhi", "khush", "udaas", "thak", "gaya", "gayi", "raha", "rahi",
+    "gussa", "badhiya", "pareshan", "mood", "aa",
 }
+
+# Tiny romanised-Hindi sentiment lexicon (used to correct the multilingual model)
+_HI_POS = {"accha", "acha", "khush", "badhiya", "mast", "maza", "zabardast", "shukriya", "pyaar"}
+_HI_NEG = {"gussa", "dukhi", "udaas", "pareshan", "thak", "thaka", "bura", "bekar",
+           "tension", "darr", "akela", "rona"}
+_HI_NEGATORS = {"nahi", "nahin", "na", "mat"}
 
 
 def detect_lang(text: str) -> str:
@@ -33,6 +42,15 @@ def detect_lang(text: str) -> str:
     if sum(t in _HINGLISH_TOKENS for t in tokens) >= 2:
         return "hi"
     return "en"
+
+
+def hinglish_lexicon(text: str) -> float:
+    """Return +1 / -1 / 0 from a tiny romanised-Hindi lexicon (negation flips the sign)."""
+    toks = re.findall(r"[a-z]+", text.lower())
+    score = sum(t in _HI_POS for t in toks) - sum(t in _HI_NEG for t in toks)
+    if any(t in _HI_NEGATORS for t in toks):
+        score = -score
+    return 1.0 if score > 0 else -1.0 if score < 0 else 0.0
 
 
 @dataclass
@@ -70,6 +88,7 @@ class TransformerEngine:
     ML_SENT = "cardiffnlp/twitter-xlm-roberta-base-sentiment"
     EMO = "SamLowe/roberta-base-go_emotions"
     _LABEL_FIX = {"label_0": "negative", "label_1": "neutral", "label_2": "positive"}
+    _LEXICON_WEIGHT = 0.6   # weight of the Hinglish lexicon when it fires
 
     def __init__(self, use_emotions: bool = True):
         from transformers import pipeline  # raises ImportError if missing
@@ -78,9 +97,17 @@ class TransformerEngine:
         self._device = 0 if torch.cuda.is_available() else -1
         self._pipes: dict[str, object] = {}
         self._use_emotions = use_emotions
+        self._warned_ml = False
+        self._vader = None
         self._get("sent_en")                      # fail fast if the hub is unreachable
         if use_emotions:
             self._get("emo")
+        try:                                      # preload so the first Hindi message is not slow
+            self._get("sent_ml")
+        except Exception as e:
+            print(f"[meheng] multilingual model unavailable ({type(e).__name__}); "
+                  f"Hindi/Hinglish will use VADER")
+            self._warned_ml = True
 
     def _get(self, key: str):
         if key not in self._pipes:
@@ -96,10 +123,32 @@ class TransformerEngine:
 
     def analyze(self, text: str, lang: str = "en") -> Sentiment:
         key = "sent_ml" if lang != "en" else "sent_en"
+        try:
+            pipe = self._get(key)
+        except Exception as e:
+            if key == "sent_en":
+                raise
+            if not self._warned_ml:
+                print(f"[meheng] multilingual model unavailable ({type(e).__name__}); "
+                      f"using VADER for Hindi/Hinglish")
+                self._warned_ml = True
+            if self._vader is None:
+                self._vader = VaderEngine()
+            return self._vader.analyze(text, lang)
+
         probs = {}
-        for d in self._flat(self._get(key)(text, truncation=True, max_length=256)):
+        for d in self._flat(pipe(text, truncation=True, max_length=256)):
             lab = d["label"].lower()
             probs[self._LABEL_FIX.get(lab, lab)] = float(d["score"])
+
+        # Hybrid correction for romanised Hinglish (low-resource for the transformer)
+        if lang != "en":
+            lex = hinglish_lexicon(text)
+            if lex != 0.0:
+                w = self._LEXICON_WEIGHT
+                target = {"positive": float(lex > 0), "negative": float(lex < 0), "neutral": 0.0}
+                probs = {k: (1 - w) * probs.get(k, 0.0) + w * target[k] for k in target}
+
         label = max(probs, key=probs.get)
         compound = probs.get("positive", 0.0) - probs.get("negative", 0.0)
 

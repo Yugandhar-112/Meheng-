@@ -15,3 +15,5 @@ datasets          # only for eval/eval_sentiment.py --tweet-eval
 # --- optional LLM backends (pick one, set its API key) ---
 anthropic
 google-genai
+sentencepiece
+protobuf

@@ -32,6 +32,8 @@ SKILL_TEXT = {
              "hi": "Main baat kar sakta hoon, aapka mood samajh sakta hoon, time/date bata sakta hoon aur jokes suna sakta hoon."},
 }
 
+EMOTION_GATE = 0.3   # |polarity| above this => treat the message as emotional, not a command
+
 
 @dataclass
 class Turn:
@@ -69,6 +71,15 @@ class Meheng:
             return SKILL_TEXT[intent][lang].format(name=self.user)
         return None
 
+    @staticmethod
+    def _too_emotional_for_skill(intent: str, sent: Sentiment) -> bool:
+        """Emotional messages get empathy from the LLM, not a canned skill reply."""
+        if intent == "greeting":                      # a greeting from someone upset
+            return sent.compound < -0.4
+        if intent in ("goodbye", "none"):
+            return False
+        return abs(sent.compound) >= EMOTION_GATE
+
     def respond(self, text: str) -> Turn:
         t0 = time.perf_counter()
         lang = detect_lang(text)
@@ -86,13 +97,12 @@ class Meheng:
         else:
             intent, iscore = self.matcher.match(text)
             skill = None
-            # a greeting from someone clearly upset should get empathy, not a canned hello
-            if not (intent == "greeting" and sent.compound < -0.4) and intent != "none":
+            if intent != "none" and not self._too_emotional_for_skill(intent, sent):
                 skill = self._skill(intent, lang)
             if skill:
                 reply, backend = skill, "skill"
             else:
-                intent = "none" if intent in ("greeting",) else intent
+                intent = "none"                       # no skill used -> LLM / empathy path
                 msgs = self.messages[-self.window:] + [{"role": "user", "content": text}]
                 system = build_system_prompt(sent, self.mood.summary())
                 try:
