@@ -74,10 +74,10 @@ class Meheng:
     @staticmethod
     def _too_emotional_for_skill(intent: str, sent: Sentiment) -> bool:
         """Emotional messages get empathy from the LLM, not a canned skill reply."""
-        if intent == "greeting":                      # a greeting from someone upset
-            return sent.compound < -0.4
         if intent in ("goodbye", "none"):
             return False
+        if intent == "greeting":                      # "hi" is neutral; "I'm happy/sad" is not
+            return abs(sent.compound) >= 0.4
         return abs(sent.compound) >= EMOTION_GATE
 
     def respond(self, text: str) -> Turn:

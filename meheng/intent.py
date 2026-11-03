@@ -1,8 +1,8 @@
 """Intent matching for built-in skills (time, date, jokes ...).
 
-Primary: multilingual Sentence-BERT embeddings + cosine similarity to example phrases
-(handles paraphrases and Hindi/Hinglish). Fallback: difflib string similarity.
-Anything below threshold -> "none" and goes to the LLM.
+Hybrid: multilingual Sentence-BERT embeddings + cosine similarity propose an intent, and a small
+keyword check confirms it (SBERT alone matches short romanised Hinglish too loosely).
+Fallback: difflib string similarity. Anything unconfirmed -> "none" and goes to the LLM.
 """
 from __future__ import annotations
 
@@ -24,9 +24,34 @@ INTENTS: dict[str, list[str]] = {
              "tum kya kar sakte ho"],
     "identity": ["who are you", "what is your name", "tum kaun ho", "tell me about yourself"],
 }
+
+# An intent from SBERT/difflib is only accepted if one of these keywords is in the text.
+REQUIRED_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "greeting": ("hi", "hello", "hey", "namaste", "good morning", "good evening", "kaise ho"),
+    "goodbye": ("bye", "goodbye", "see you", "talk to you", "good night", "alvida"),
+    "time": ("time", "baje", "samay", "clock"),
+    "date": ("date", "day", "din", "tarikh", "taarikh", "tareekh"),
+    "joke": ("joke", "funny", "laugh", "hasa", "mazak", "chutkula"),
+    "help": ("help", "can you do", "kar sakte", "features", "madad"),
+    "identity": ("who", "name", "kaun", "naam", "yourself"),
+}
+
 MAX_TOKENS = 6          # long messages are never treated as simple commands
-SBERT_THRESHOLD = 0.65  # raised from 0.60: emotional sentences were hijacked by skills
+SBERT_THRESHOLD = 0.65
 DIFFLIB_THRESHOLD = 0.75
+
+
+def _has_keyword(intent: str, tokens: list[str], text: str) -> bool:
+    keys = REQUIRED_KEYWORDS.get(intent)
+    if not keys:
+        return True
+    for k in keys:
+        if " " in k:
+            if k in text:
+                return True
+        elif any(t == k or (len(k) > 3 and t.startswith(k)) for t in tokens):
+            return True
+    return False
 
 
 class IntentMatcher:
@@ -46,16 +71,18 @@ class IntentMatcher:
 
     def match(self, text: str) -> tuple[str, float]:
         t = re.sub(r"[^\w\s']", " ", text.lower()).strip()
-        if not t or len(t.split()) > MAX_TOKENS:
+        toks = t.split()
+        if not t or len(toks) > MAX_TOKENS:
             return "none", 0.0
         if self._model is not None:
             q = self._model.encode([t], normalize_embeddings=True)[0]
             sims = self._emb @ q
             k = int(sims.argmax())
             score, intent = float(sims[k]), self.examples[k][0]
-            return (intent, score) if score >= SBERT_THRESHOLD else ("none", score)
+            if score >= SBERT_THRESHOLD and _has_keyword(intent, toks, t):
+                return intent, score
+            return "none", score
         best, best_i = 0.0, "none"
-        toks = t.split()
         for intent, p in self.examples:
             s = difflib.SequenceMatcher(None, t, p).ratio()
             if len(p.split()) >= 2 and p in t:
@@ -64,4 +91,6 @@ class IntentMatcher:
                 s = max(s, 0.85)
             if s > best:
                 best, best_i = s, intent
-        return (best_i, best) if best >= DIFFLIB_THRESHOLD else ("none", best)
+        if best >= DIFFLIB_THRESHOLD and _has_keyword(best_i, toks, t):
+            return best_i, best
+        return "none", best

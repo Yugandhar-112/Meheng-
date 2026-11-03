@@ -23,13 +23,14 @@ _HINGLISH_TOKENS = {
     "hai", "hain", "nahi", "nahin", "kya", "mujhe", "bahut", "acha", "accha", "kaise",
     "kaisa", "main", "mera", "meri", "tum", "aap", "ho", "tha", "thi", "kuch", "bhi",
     "aaj", "yaar", "bhai", "dukhi", "khush", "udaas", "thak", "gaya", "gayi", "raha", "rahi",
-    "gussa", "badhiya", "pareshan", "mood", "aa",
+    "gussa", "badhiya", "pareshan", "mood", "aa", "mein", "hu", "hun", "tabiyet", "tabiyat",
+    "kharaab", "kharab", "kitne", "baje", "batao", "sunao", "kaun", "kahan", "kab", "kaun", "samay", "din",
 }
 
 # Tiny romanised-Hindi sentiment lexicon (used to correct the multilingual model)
-_HI_POS = {"accha", "acha", "khush", "badhiya", "mast", "maza", "zabardast", "shukriya", "pyaar"}
-_HI_NEG = {"gussa", "dukhi", "udaas", "pareshan", "thak", "thaka", "bura", "bekar",
-           "tension", "darr", "akela", "rona"}
+_HI_POS = {"accha", "acha", "achha", "khush", "badhiya", "mast", "maza", "zabardast", "shukriya", "pyaar"}
+_HI_NEG = {"gussa", "dukhi", "udaas", "pareshan", "pareshaan", "thak", "thaka", "bura", "bekar",
+           "tension", "darr", "akela", "rona", "kharaab", "kharab", "bimaar", "bimar", "dard"}
 _HI_NEGATORS = {"nahi", "nahin", "na", "mat"}
 
 

@@ -1,3 +1,4 @@
 meheng.db
 __pycache__/
 .env
+logs/
