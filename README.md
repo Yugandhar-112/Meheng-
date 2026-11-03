@@ -7,7 +7,7 @@ rule/command assistant is rebuilt as a **text chatbot that understands how the u
 | Stage | Technique | File |
 |---|---|---|
 | 1. Safety | High-recall crisis detection (EN/Hindi/Hinglish) → fixed helpline reply *before* any model runs; profanity flagging (replaces "objectionable query tracking" from the original) | `meheng/safety.py` |
-| 2. Sentiment + emotion | **RoBERTa** (`twitter-roberta-base-sentiment-latest`) for polarity, **GoEmotions RoBERTa** for 28 fine-grained emotions, **XLM-RoBERTa** (`twitter-xlm-roberta-base-sentiment`) for Hindi/Hinglish. VADER = baseline / offline fallback | `meheng/sentiment.py` |
+| 2. Sentiment + emotion | **RoBERTa** (`twitter-roberta-base-sentiment-latest`) for polarity, **GoEmotions RoBERTa** for 28 fine-grained emotions, **XLM-RoBERTa** (`twitter-xlm-roberta-base-sentiment`) for Hindi/Hinglish. Romanised Hinglish gets a small lexicon-blend correction (hybrid). VADER = baseline / offline fallback | `meheng/sentiment.py` |
 | 3. Mood tracking | Exponential moving average of polarity + trend (improving/steady/declining) across the conversation | `meheng/mood.py` |
 | 4. Intent | **Sentence-BERT** (multilingual MiniLM) embeddings + cosine similarity to example phrases → built-in skills (time, date, jokes…) with a `difflib` fallback | `meheng/intent.py` |
 | 5. Generation | **LLM with emotion-conditioned prompting**: detected emotion, polarity and mood trend are injected into the system prompt (Claude or Gemini). Offline template responder if no API key | `meheng/llm.py` |
@@ -44,18 +44,21 @@ If a download fails the app automatically falls back to VADER and tells you in t
 | Engine | Accuracy | Macro-F1 | English | Hindi/Hinglish |
 |---|---|---|---|---|
 | VADER (baseline) | 0.667 | 0.667 | 0.812 | 0.308 |
-| RoBERTa / XLM-R transformer | *run `eval_sentiment.py` and paste here* | | | |
+| RoBERTa / XLM-R + Hinglish lexicon (hybrid) | **0.956** | **0.956** | 0.938 | 1.000 |
 
-VADER collapses on Hindi/Hinglish (no vocabulary) — the motivation for the multilingual transformer.
-**The set is small and hand-labelled, so treat it as a demonstration, not a benchmark.** For a more credible
-number run `--tweet-eval 500` (TweetEval sentiment test split).
+VADER collapses on Hindi/Hinglish (no vocabulary), which is the motivation for the multilingual transformer.
+For romanised Hinglish (Hindi written in Latin letters) the XLM-R output is blended with a small
+hand-written lexicon (weight 0.6), because the model was trained mostly on native-script text.
+**The set is tiny and hand-labelled, and the lexicon words were chosen after inspecting early errors, so the
+Hindi/Hinglish figure is an optimistic demonstration, not a benchmark.** Full output: `eval/results.md`.
+For a more credible number run `--tweet-eval 500` (TweetEval sentiment test split).
 
 ## Limitations (be upfront about these)
 - Sentiment ≠ emotion ≠ mental state. This is **not a diagnostic or therapeutic tool**.
 - Crisis detection is keyword-based (high recall, many false positives, misses indirect phrasing).
 - Profanity list is English-only. Sarcasm ("Oh great, another Monday") remains hard for all engines.
-- Romanised Hinglish is handled by XLM-R only approximately; fine-grained emotions are English-only.
-- LLM replies can be wrong; no retrieval/grounding is used.
+- Romanised Hinglish relies on XLM-R plus a tiny hand-written lexicon; it will miss words outside that lexicon. Fine-grained emotions are English-only.
+- Intent skills are gated by sentiment: strongly emotional messages go to the LLM/empathy path instead of canned replies.- LLM replies can be wrong; no retrieval/grounding is used.
 
 ## Future work
 Fine-tune **ModernBERT** (Warner et al., 2024) on GoEmotions + Hindi data; add retrieval-augmented generation (RAG);
